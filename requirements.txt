@@ -1,0 +1,31 @@
+# ── Core Pipeline ──
+confluent-kafka
+redis
+numpy
+opencv-python-headless
+
+# ── Stream Processing ──
+# On Python 3.12+, install with: pip install "setuptools<75" wheel && pip install --no-build-isolation apache-flink
+apache-flink
+
+# ── AI / Embeddings ──
+torch
+torchvision
+Pillow
+imagehash
+
+# ── Storage ──
+boto3
+
+# ── Monitoring ──
+prometheus-client
+
+# ── Config / Utils ──
+python-dotenv
+pydantic
+pydantic-settings
+structlog
+orjson
+
+# ── Testing ──
+pytest

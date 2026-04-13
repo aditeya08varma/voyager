@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+dist/
+build/
+.env
+*.mp4
+*.avi
+data/sample_videos/
+data/model_cache/
+graphify-out/
+.DS_Store
+.pytest_cache/

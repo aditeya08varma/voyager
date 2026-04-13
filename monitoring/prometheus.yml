@@ -1,0 +1,39 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # Voyager application metrics (Python prometheus_client)
+  # Port 8000 = subtask 0 or standalone consumer, 8001 = subtask 1
+  - job_name: "voyager-app"
+    static_configs:
+      - targets:
+          - "host.docker.internal:8000"
+          - "host.docker.internal:8001"
+          - "host.docker.internal:8002"
+          - "host.docker.internal:8003"
+          - "host.docker.internal:8004"
+          - "host.docker.internal:8005"
+        labels:
+          service: "voyager-processor"
+
+  # Flink JobManager & TaskManager metrics
+  - job_name: "flink"
+    static_configs:
+      - targets:
+          - "flink-jobmanager:9249"
+          - "flink-taskmanager:9249"
+        labels:
+          service: "flink"
+
+  # Redis metrics via redis_exporter
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+        labels:
+          service: "redis"
+
+  # Prometheus self-monitoring
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
