@@ -40,8 +40,6 @@ class S3Settings(BaseSettings):
 
 
 class FlinkSettings(BaseSettings):
-    jobmanager_host: str = Field("localhost", alias="FLINK_JOBMANAGER_HOST")
-    jobmanager_port: int = Field(8081, alias="FLINK_JOBMANAGER_PORT")
     parallelism: int = Field(2, alias="FLINK_PARALLELISM")
     checkpoint_interval_ms: int = Field(5000, alias="FLINK_CHECKPOINT_INTERVAL_MS")
 

@@ -260,10 +260,12 @@ buffer timeout for low latency, and requires the Kafka connector JAR at
 Critically, it calls `StreamExecutionEnvironment.get_execution_environment(config)`
 with no remote target — in PyFlink that spins up an **embedded local
 MiniCluster inside the Python process**, not a submission to a remote cluster.
-That's why the code hardcodes `rest.port = "8082"` — it's giving *that*
-embedded MiniCluster's own web UI a port that doesn't collide with the
-docker-compose Flink cluster's UI on `8081`. See
-[Known Gaps, #3](#3-the-docker-compose-flink-cluster-is-never-actually-used).
+That's why the code hardcodes `rest.port = "8082"`, giving that embedded
+MiniCluster's own web UI a fixed port. `docker-compose.yml` no longer runs a
+separate Flink cluster (it used to, unused — see
+[Known Gaps, #3](#3-the-docker-compose-flink-cluster-is-never-actually-used--removed)),
+so 8082 is the only Flink UI in the project now, and it only exists while
+`--mode flink` is actually running.
 
 `--mode standalone` calls `run_standalone_consumer()`, a plain
 `confluent_kafka.Consumer` loop with no Flink dependency at all — useful for
@@ -279,8 +281,6 @@ flowchart TB
     subgraph Compose["docker-compose.yml"]
         ZK["zookeeper : 2181"]
         KFK["kafka : 9092 / 29092\n6 partitions · 2h retention"]
-        FJM["flink-jobmanager : 8081"]
-        FTM["flink-taskmanager"]
         RD["redis : 6379\n512MB · allkeys-lru · AOF"]
         LS["localstack : 4566\n(S3 emulation)"]
         PROM["prometheus : 9090"]
@@ -289,14 +289,11 @@ flowchart TB
     end
 
     ZK --> KFK
-    FJM --> FTM
     RD --> RDEXP
     RDEXP --> PROM
-    FTM -->|"metrics :9249"| PROM
     PROM --> GRAF
 
-    APP["python -m processor.flink_job --mode flink\n(embedded PyFlink MiniCluster, UI on :8082)"]
-    APP -.->|"not currently submitted to"| FJM
+    APP["python -m processor.flink_job --mode flink\n(embedded PyFlink MiniCluster, UI on :8082,\nnot part of docker-compose)"]
     APP --> KFK
     APP --> RD
 ```
@@ -395,13 +392,18 @@ calls any of them. Batch-uploading processed embeddings periodically from
 `VoyagerStreamProcessor` would close the gap between the architecture diagram
 and the code.
 
-#### 3. The docker-compose Flink cluster is never actually used
-`--mode flink` runs an embedded PyFlink MiniCluster inside the Python process
-(hence the distinct `rest.port=8082`); it never submits a job to
-`flink-jobmanager:8081`. Either add a real submission path (package the job,
-`flink run` against the cluster) or remove the `flink-jobmanager`/`flink-taskmanager`
-services and document `--mode flink` honestly as "local Flink runtime for
-exercising the DataStream API," not a cluster deployment.
+#### 3. ~~The docker-compose Flink cluster is never actually used~~ — removed
+`--mode flink` always ran (and still runs) an embedded PyFlink MiniCluster
+inside the Python process (hence the distinct `rest.port=8082`); it never
+submitted a job to a remote cluster. Rather than build out a real submission
+path (packaging the job, `flink run` against a cluster, installing every app
+dependency — torch, torchvision, opencv — into the TaskManager image), the
+`flink-jobmanager`/`flink-taskmanager` services, the `flink-checkpoints`
+volume, and the Prometheus scrape job that pointed at them have all been
+removed from `docker-compose.yml` and `monitoring/prometheus.yml`. The
+now-equally-dead `FLINK_JOBMANAGER_HOST`/`FLINK_JOBMANAGER_PORT` settings
+(never read by any code path) were removed from `FlinkSettings` too.
+`--mode flink` is unaffected — it never depended on these containers.
 
 #### 4. ~~`multi_camera_producer.py` duplicates and contradicts `kafka_producer.py`~~ — docstring fixed
 Its docstring said 4 cameras; its code hardcodes 6 (`virat_test_01–06.mp4`) at
@@ -431,11 +433,20 @@ README now states both ports and which Flink instance each belongs to.
 (none were read anywhere in the code). `KAFKA_TOPIC_METRICS` was also removed
 from `KafkaSettings` itself.
 
-#### 9. No Dockerfile for the application itself
-`docker-compose.yml` containerizes only infrastructure; `producer`, `processor`,
-and `inference` run on the host via a local venv. Fine for local dev, but worth
-stating since the scaling doc's GPU pool and TaskManager fleet both assume
-containerized app code that doesn't exist yet.
+#### 9. ~~No Dockerfile for the application itself~~ — fixed
+Added a standalone `Dockerfile` (not wired into `docker-compose.yml`, so the
+existing host-based quick start is untouched) covering the producer and
+`--mode standalone`. Two things had to be discovered by actually building it,
+not just writing it: `python:3.12-slim` needs `build-essential` because
+`apache-flink` compiles a Cython extension (`pyflink/fn_execution`) at install
+time, and it must follow the exact `setuptools<75` + `--no-build-isolation`
+sequence `requirements.txt` already documents for Python 3.12. Verified
+end-to-end: built the image, ran it on the `voyager-net` network against the
+real `kafka`/`redis` containers with `KAFKA_BOOTSTRAP_SERVERS=kafka:29092` and
+`REDIS_HOST=redis`, produced 5 real frames from the host, and watched the
+container decode them, download MobileNetV2 weights, run inference, and log
+`standalone_consumer_stopped total_processed=5`. `--mode flink` isn't covered
+by this image — it additionally needs a JRE, since Flink runs on the JVM.
 
 #### 10. ~~The throughput gauge recomputes a list on every frame~~ — fixed
 `MetricsCollector.record_frame_processed` used to rebuild `self._throughput_window`

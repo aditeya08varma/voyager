@@ -17,15 +17,6 @@ scrape_configs:
         labels:
           service: "voyager-processor"
 
-  # Flink JobManager & TaskManager metrics
-  - job_name: "flink"
-    static_configs:
-      - targets:
-          - "flink-jobmanager:9249"
-          - "flink-taskmanager:9249"
-        labels:
-          service: "flink"
-
   # Redis metrics via redis_exporter
   - job_name: "redis"
     static_configs:

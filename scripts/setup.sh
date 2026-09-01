@@ -32,7 +32,6 @@ sleep 15
 echo "[5/5] Verifying services..."
 echo -n "  Kafka:      " && (docker exec voyager-kafka kafka-topics --bootstrap-server localhost:29092 --list &>/dev/null && echo "OK" || echo "WAITING")
 echo -n "  Redis:      " && (docker exec voyager-redis redis-cli ping 2>/dev/null || echo "WAITING")
-echo -n "  Flink UI:   " && (curl -sf http://localhost:8081/overview &>/dev/null && echo "OK" || echo "WAITING")
 echo -n "  Prometheus: " && (curl -sf http://localhost:9090/-/ready &>/dev/null && echo "OK" || echo "WAITING")
 echo -n "  Grafana:    " && (curl -sf http://localhost:3000/api/health &>/dev/null && echo "OK" || echo "WAITING")
 

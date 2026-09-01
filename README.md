@@ -65,13 +65,12 @@ python -m processor.flink_job --mode standalone
 | Service    | URL                    | Credentials     |
 |------------|------------------------|-----------------|
 | Grafana    | http://localhost:3000  | admin / voyager |
-| Flink UI (embedded, `--mode flink`) | http://localhost:8082 | — |
-| Flink UI (docker-compose cluster, currently unused by the app) | http://localhost:8081 | — |
+| Flink UI (only while `--mode flink` is running) | http://localhost:8082 | — |
 | Prometheus | http://localhost:9090  | —               |
 
-> `--mode flink` runs its own embedded PyFlink MiniCluster (port 8082) rather than
-> submitting to the `flink-jobmanager`/`flink-taskmanager` containers (port 8081).
-> See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+> `--mode flink` runs its own embedded PyFlink MiniCluster with its UI on port
+> 8082 — it does not submit to a separate Flink cluster; `docker-compose.yml`
+> doesn't run one. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Cache Mechanism
 
