@@ -216,8 +216,8 @@ true. See [Known Gaps, #1](#1-perceptual_hashpy-is-fully-built-and-never-used).
 `MobileNet_V2_Weights.DEFAULT`, replaces the classifier head with
 `torch.nn.Identity()` to expose the 1280-dim feature vector directly, and runs
 the standard ImageNet preprocessing (`Resize(256)` → `CenterCrop(224)` →
-`Normalize` with ImageNet mean/std). `self._device = "cpu"` is hardcoded — there
-is no CUDA/MPS selection path anywhere in this file.
+`Normalize` with ImageNet mean/std). `_select_device()` picks CUDA, then MPS,
+then falls back to CPU.
 
 ### Metrics (`monitoring/metrics_exporter.py`)
 
@@ -443,10 +443,11 @@ with a list comprehension on every call — O(n) per frame where n scales with
 sustained FPS over the 5-second window. It's now a `collections.deque` with a
 timestamp-based `popleft` loop, which is O(1) amortized per frame.
 
-#### 11. `ModelHandler` has no GPU path
-`self._device = "cpu"` is hardcoded, with no CUDA/MPS selection logic anywhere,
-despite the scaling doc's GPU inference pool. First place to touch if GPU
-support becomes a real goal.
+#### 11. ~~`ModelHandler` has no GPU path~~ — fixed
+`_select_device()` now picks CUDA, then MPS, then CPU, and the model and
+output tensor move accordingly. Verified on this machine: MPS is selected and
+used automatically. Still just single-frame inference on one device, not the
+scaling doc's batched multi-GPU pool.
 
 #### 12. ~~Minor: unused `import hashlib` in `frame_processor.py`~~ — removed
 

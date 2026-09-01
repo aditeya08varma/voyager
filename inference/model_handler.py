@@ -25,9 +25,17 @@ class ModelHandler:
         self._model_name = model_name or settings.model.name
         self._model = None
         self._transform = None
-        self._device = "cpu"
+        self._device = self._select_device()
         self._total_inferences = 0
         self._total_inference_ms = 0.0
+
+    @staticmethod
+    def _select_device() -> str:
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
 
     def _load_mobilenet(self):
         from torchvision.models import mobilenet_v2, MobileNet_V2_Weights
@@ -36,6 +44,7 @@ class ModelHandler:
         model = mobilenet_v2(weights=weights)
         model.classifier = torch.nn.Identity()
         model.eval()
+        model.to(self._device)
 
         self._transform = T.Compose([
             T.Resize(256),
@@ -64,7 +73,7 @@ class ModelHandler:
         tensor = self._transform(pil_img).unsqueeze(0).to(self._device)
 
         with torch.no_grad():
-            embedding = self._model(tensor).squeeze(0).numpy()
+            embedding = self._model(tensor).squeeze(0).cpu().numpy()
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
         self._total_inferences += 1
