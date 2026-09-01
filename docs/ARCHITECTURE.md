@@ -327,11 +327,11 @@ from `.env` (gitignored — the repo correctly never commits it).
 | Model | `MODEL_NAME`, `EMBEDDING_DIM` (1280) | |
 | Producer | `FRAME_INTERVAL_MS`, `VIDEO_SOURCE`, `NUM_SIMULATED_CAMERAS` | ignored by `multi_camera_producer.py` |
 
-`.env` also defines `PROMETHEUS_PORT`, `GRAFANA_PORT`, and `METRICS_EXPORT_PORT` —
-none of these three has a matching `Field` in `config/settings.py` or is read
-anywhere in the codebase; the real ports are hardcoded in `docker-compose.yml`
-and `flink_job.py`. (`KAFKA_TOPIC_METRICS` was the fourth dead key in this
-category — it has since been removed from `KafkaSettings`.)
+`.env` previously also defined `PROMETHEUS_PORT`, `GRAFANA_PORT`, and
+`METRICS_EXPORT_PORT` — none had a matching `Field` in `config/settings.py` or
+was read anywhere in the codebase; the real ports are hardcoded in
+`docker-compose.yml` and `flink_job.py`. All three, plus the unused
+`KAFKA_TOPIC_METRICS`, have since been removed.
 
 ---
 
@@ -425,11 +425,11 @@ number is still open.
 #### 7. ~~Two Flink UIs, two ports, no explanation~~ — README clarified
 README now states both ports and which Flink instance each belongs to.
 
-#### 8. Dead configuration
-`PROMETHEUS_PORT`, `GRAFANA_PORT`, and `METRICS_EXPORT_PORT` are declared in
-`.env` but read by nothing — still open (`.env` isn't tracked by git, so
-there's nothing to fix in the repo itself; worth pruning locally if you touch
-`.env` next). `KAFKA_TOPIC_METRICS` has been removed from `KafkaSettings`.
+#### 8. ~~Dead configuration~~ — fixed
+`PROMETHEUS_PORT`, `GRAFANA_PORT`, `METRICS_EXPORT_PORT`, and the leftover
+`KAFKA_TOPIC_METRICS` line have all been removed from the local `.env`
+(none were read anywhere in the code). `KAFKA_TOPIC_METRICS` was also removed
+from `KafkaSettings` itself.
 
 #### 9. No Dockerfile for the application itself
 `docker-compose.yml` containerizes only infrastructure; `producer`, `processor`,
