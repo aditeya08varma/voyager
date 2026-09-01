@@ -1,6 +1,11 @@
 """
 Multi-Camera Kafka Producer for Voyager
-Spawns 4 concurrent camera simulators.
+
+Spawns 6 concurrent camera simulators, each reading one of the hardcoded
+video_sources below at a fixed 33ms interval (~30 FPS). Unlike
+kafka_producer.run_multi_camera_producer(), this entry point ignores
+config/settings.py's NUM_SIMULATED_CAMERAS, VIDEO_SOURCE, and
+FRAME_INTERVAL_MS entirely.
 """
 from __future__ import annotations
 

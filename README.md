@@ -3,6 +3,10 @@
 Real-time video frame processing pipeline with AI inference caching,
 built on Kafka, Apache Flink (PyFlink), Redis, and MobileNetV2.
 
+For a full, source-verified technical deep dive — architecture diagrams, the
+exact caching mechanism, and a list of known gaps between this README and the
+code — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Architecture
 
 ```
@@ -13,8 +17,8 @@ Camera Feeds → Kafka → PyFlink → Redis Cache → AI Model → S3
 
 ## Key Metrics
 
-- **Sub-50ms** per-frame processing latency
-- **40%+** inference savings via perceptual hash caching
+- **Sub-50ms** per-frame processing latency (target; run `python -m loadtest.stress_test --test latency` for a measured number on your machine)
+- **Cache-driven inference savings** — the cache does exact content-hash matching today, not fuzzy perceptual matching (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)); the bundled synthetic test (`--test cache`) measures ~75% hit rate at its default parameters, 40%+ is the production-scale target from `loadtest/scale_design.md`
 - **1280-dim** MobileNetV2 embeddings
 - **6-partition** Kafka topic with LZ4 compression
 
@@ -61,8 +65,13 @@ python -m processor.flink_job --mode standalone
 | Service    | URL                    | Credentials     |
 |------------|------------------------|-----------------|
 | Grafana    | http://localhost:3000  | admin / voyager |
-| Flink UI   | http://localhost:8082  | —               |
+| Flink UI (embedded, `--mode flink`) | http://localhost:8082 | — |
+| Flink UI (docker-compose cluster, currently unused by the app) | http://localhost:8081 | — |
 | Prometheus | http://localhost:9090  | —               |
+
+> `--mode flink` runs its own embedded PyFlink MiniCluster (port 8082) rather than
+> submitting to the `flink-jobmanager`/`flink-taskmanager` containers (port 8081).
+> See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Cache Mechanism
 

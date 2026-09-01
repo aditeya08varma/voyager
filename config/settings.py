@@ -8,7 +8,6 @@ class KafkaSettings(BaseSettings):
     bootstrap_servers: str = Field("localhost:9092", alias="KAFKA_BOOTSTRAP_SERVERS")
     topic_frames: str = Field("voyager.frames.raw", alias="KAFKA_TOPIC_FRAMES")
     topic_processed: str = Field("voyager.frames.processed", alias="KAFKA_TOPIC_PROCESSED")
-    topic_metrics: str = Field("voyager.metrics", alias="KAFKA_TOPIC_METRICS")
     group_id: str = Field("voyager-processor", alias="KAFKA_GROUP_ID")
     message_max_bytes: int = 10_485_760
 
