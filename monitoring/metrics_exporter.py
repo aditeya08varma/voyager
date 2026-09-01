@@ -13,6 +13,7 @@ Exposes:
 from __future__ import annotations
 
 import threading
+from collections import deque
 
 from prometheus_client import (
     Counter, Gauge, Histogram, Info, start_http_server,
@@ -101,7 +102,7 @@ class MetricsCollector:
 
         self._total_frames = 0
         self._cache_hits = 0
-        self._throughput_window: list[float] = []
+        self._throughput_window: deque[float] = deque()
 
     def record_frame_processed(
         self,
@@ -130,7 +131,8 @@ class MetricsCollector:
         now = time.monotonic()
         self._throughput_window.append(now)
         cutoff = now - 5.0
-        self._throughput_window = [t for t in self._throughput_window if t > cutoff]
+        while self._throughput_window and self._throughput_window[0] <= cutoff:
+            self._throughput_window.popleft()
         fps = len(self._throughput_window) / 5.0
         self.throughput.set(round(fps, 2))
 

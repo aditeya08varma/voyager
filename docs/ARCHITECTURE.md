@@ -236,6 +236,11 @@ comprehension on every single call to `record_frame_processed` — see
 anticipating up to six parallel subtasks even though `FLINK_PARALLELISM`
 defaults to 2.
 
+Throughput is computed from a rolling 5-second window of timestamps held in a
+`collections.deque`, with expired entries popped from the front on each call —
+O(1) amortized per frame (see Known Gaps, #10, for the list-based version this
+replaced).
+
 ### Storage (`storage/s3_handler.py`)
 
 `S3Handler` is complete: it auto-creates its two buckets against the LocalStack
@@ -432,11 +437,11 @@ and `inference` run on the host via a local venv. Fine for local dev, but worth
 stating since the scaling doc's GPU pool and TaskManager fleet both assume
 containerized app code that doesn't exist yet.
 
-#### 10. The throughput gauge recomputes a list on every frame
-`MetricsCollector.record_frame_processed` rebuilds `self._throughput_window`
+#### 10. ~~The throughput gauge recomputes a list on every frame~~ — fixed
+`MetricsCollector.record_frame_processed` used to rebuild `self._throughput_window`
 with a list comprehension on every call — O(n) per frame where n scales with
-sustained FPS over the 5-second window. A `collections.deque` with a
-timestamp-based `popleft` loop would be O(1) amortized.
+sustained FPS over the 5-second window. It's now a `collections.deque` with a
+timestamp-based `popleft` loop, which is O(1) amortized per frame.
 
 #### 11. `ModelHandler` has no GPU path
 `self._device = "cpu"` is hardcoded, with no CUDA/MPS selection logic anywhere,
