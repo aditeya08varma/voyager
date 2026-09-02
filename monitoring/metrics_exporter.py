@@ -9,6 +9,9 @@ Exposes:
   - voyager_cache_hit_rate               (Gauge)
   - voyager_inferences_skipped_total     (Counter)
   - voyager_throughput_fps               (Gauge)
+  - voyager_fuzzy_cache_hits_total       (Counter — subset of "hit" resolved
+                                           via Hamming-distance fuzzy match
+                                           rather than an exact hash match)
 """
 from __future__ import annotations
 
@@ -95,6 +98,11 @@ class MetricsCollector:
             "Total inference calls avoided via cache hits",
         )
 
+        self.fuzzy_cache_hits = Counter(
+            "voyager_fuzzy_cache_hits_total",
+            "Subset of cache hits resolved via Hamming-distance fuzzy match rather than an exact hash match",
+        )
+
         self.throughput = Gauge(
             "voyager_throughput_fps",
             "Current processing throughput in frames/second",
@@ -110,6 +118,7 @@ class MetricsCollector:
         total_ms: float,
         cache_hit: bool,
         inference_ms: float = 0.0,
+        fuzzy: bool = False,
     ) -> None:
         import time
 
@@ -117,8 +126,13 @@ class MetricsCollector:
         self.frame_latency.labels(camera_id=camera_id).observe(total_ms / 1000.0)
 
         if cache_hit:
+            # status stays "hit" regardless of fuzzy, so the existing
+            # hit-vs-miss dashboard panel doesn't silently drop fuzzy hits;
+            # voyager_fuzzy_cache_hits_total tracks the fuzzy subset separately.
             self.cache_lookups.labels(status="hit").inc()
             self.inferences_skipped.inc()
+            if fuzzy:
+                self.fuzzy_cache_hits.inc()
             self._cache_hits += 1
         else:
             self.cache_lookups.labels(status="miss").inc()

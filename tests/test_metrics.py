@@ -36,6 +36,21 @@ class TestRecordFrameProcessed:
         assert metrics._total_frames == 1
         assert metrics._cache_hits == 0
 
+    def test_fuzzy_hit_counts_as_a_hit_and_increments_fuzzy_counter(self, metrics):
+        before = metrics.fuzzy_cache_hits._value.get()
+
+        metrics.record_frame_processed(camera_id="CAM-1", total_ms=5.0, cache_hit=True, fuzzy=True)
+
+        assert metrics._cache_hits == 1
+        assert metrics.fuzzy_cache_hits._value.get() == before + 1
+
+    def test_exact_hit_does_not_increment_fuzzy_counter(self, metrics):
+        before = metrics.fuzzy_cache_hits._value.get()
+
+        metrics.record_frame_processed(camera_id="CAM-1", total_ms=5.0, cache_hit=True, fuzzy=False)
+
+        assert metrics.fuzzy_cache_hits._value.get() == before
+
     def test_hit_rate_gauge_reflects_mixed_results(self, metrics):
         metrics.record_frame_processed(camera_id="CAM-1", total_ms=1.0, cache_hit=True)
         metrics.record_frame_processed(camera_id="CAM-1", total_ms=1.0, cache_hit=False)

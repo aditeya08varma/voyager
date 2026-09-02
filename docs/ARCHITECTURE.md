@@ -53,9 +53,11 @@ flowchart LR
 
     F --> D["frame_processor\n.decode_frame_message()\ndecode JPEG → grayscale →\ncontent_hash + edge_density"]
     D --> L{"EmbeddingCache.lookup()\nRedis GET voyager:emb:{hash}"}
-    L -->|HIT| E1["cached 1280-d embedding\n(< 1ms)"]
-    L -->|MISS| M["ModelHandler\n.generate_embedding()\nMobileNetV2, CUDA → MPS → CPU"]
-    M --> S["EmbeddingCache.store()\nRedis SETEX, TTL 3600s"]
+    L -->|"exact HIT"| E1["cached 1280-d embedding\n(< 1ms)"]
+    L -->|"clean miss"| FZ{"fuzzy fallback\nHamming distance ≤ 3\nvs last 200 hashes"}
+    FZ -->|"FUZZY_HIT"| E1
+    FZ -->|"still a miss"| M["ModelHandler\n.generate_embedding()\nMobileNetV2, CUDA → MPS → CPU"]
+    M --> S["EmbeddingCache.store()\nRedis SETEX, TTL 3600s\n+ seeds fuzzy window"]
     S --> E1
 
     E1 --> R["enriched JSON result\n(metadata + embedding_dim + latency)"]
@@ -180,12 +182,8 @@ flowchart LR
 
 ### The cache layer — what "perceptual hash caching" actually means here
 
-This is worth being precise about, because the README's phrasing ("perceptual
-hash caching") suggests fuzzy, near-duplicate matching, and that's **not**
-what's implemented.
-
-`EmbeddingCache` (`processor/cache_handler.py`) does a plain Redis `GET`/`SETEX`
-keyed by the **exact** `content_hash` string:
+`EmbeddingCache` (`processor/cache_handler.py`) checks Redis first, an
+**exact** `GET`/`SETEX` keyed by the `content_hash` string:
 
 ```python
 def lookup(self, content_hash: str) -> CacheResult:
@@ -194,21 +192,21 @@ def lookup(self, content_hash: str) -> CacheResult:
     ...
 ```
 
-Two frames only collide in the cache if their 9×8-resized difference pattern is
-**bit-for-bit identical**. That's exactly right for the synthetic video's
-recurring static backgrounds (which really are pixel-identical on repeat), and
-it's a legitimate, cheap way to skip inference on truly static scenes — but it
-is an *exact-match* cache, not a *similarity-threshold* one.
+That alone only collides when two frames' 9×8-resized difference pattern is
+**bit-for-bit identical** — exactly right for the synthetic video's recurring
+static backgrounds, but not what "perceptual hash caching" usually implies.
 
-Separately, `inference/perceptual_hash.py` implements a genuine similarity API:
-`dhash()`, `ahash()`, `phash()`, `hamming_distance()`, and `are_similar(threshold=10)`.
-It is fully written and unit-testable — and, confirmed by a repo-wide grep, it
-is **never imported or called anywhere** in `producer/`, `processor/`,
-`inference/`, `loadtest/`, or `tests/`. It's dead code today. Wiring it into
-`EmbeddingCache.lookup()` as a fallback (scan a small set of recent hashes for
-one within Hamming distance ≤ N before falling back to inference) is the single
-change that would make the "perceptual hash caching" description literally
-true. See [Known Gaps, #1](#1-perceptual_hashpy-is-fully-built-and-never-used).
+On a clean Redis miss, `lookup()` now falls back to a fuzzy match: it keeps a
+bounded, in-memory window of the last 200 `(content_hash, embedding)` pairs
+and reuses `hamming_distance()` from `inference/perceptual_hash.py` (see
+`_find_fuzzy_match`) to look for one within a 3-bit threshold. A match returns
+`CacheResult(hit=True, fuzzy=True)`, which shows up downstream as
+`cache_status: "FUZZY_HIT"`, distinct from an exact `"HIT"`. This is what
+makes the "perceptual hash caching" description literally true rather than
+approximately true — see
+[Known Gaps, #1](#1-perceptual_hashpy-is-fully-built-and-never-used--fixed)
+for the design tradeoffs (it's a real accuracy-for-speed tradeoff, not free)
+and how it was verified against live Redis and real MobileNetV2 inference.
 
 ### AI inference (`inference/model_handler.py`)
 
@@ -222,13 +220,15 @@ then falls back to CPU.
 ### Metrics (`monitoring/metrics_exporter.py`)
 
 `MetricsCollector` is a thread-safe singleton (`__new__` + a class-level
-`threading.Lock`) exposing seven Prometheus series: `voyager_frames_processed_total`,
+`threading.Lock`) exposing eight Prometheus series: `voyager_frames_processed_total`,
 `voyager_frame_processing_seconds`, `voyager_cache_lookups_total{status}`,
 `voyager_inference_duration_seconds`, `voyager_cache_hit_rate`,
-`voyager_inferences_skipped_total`, and `voyager_throughput_fps`. Throughput is
-computed from a rolling 5-second window of timestamps, rebuilt with a list
-comprehension on every single call to `record_frame_processed` — see
-[Known Gaps, #10](#10-the-throughput-gauge-recomputes-a-list-on-every-frame).
+`voyager_inferences_skipped_total`, `voyager_throughput_fps`, and
+`voyager_fuzzy_cache_hits_total`. The `status` label on `voyager_cache_lookups_total`
+is deliberately still only `hit`/`miss` — a fuzzy hit counts as `"hit"` there,
+with `voyager_fuzzy_cache_hits_total` tracking the fuzzy subset separately, so
+the existing "Cache Hit vs Miss Rate" Grafana panel (which filters by exact
+label value) doesn't silently drop fuzzy hits.
 
 `start_metrics_server(port)` is called once per Flink subtask, on
 `8000 + subtask_index` (`processor/flink_job.py:193`) — which is exactly why
@@ -380,13 +380,35 @@ confused for the same thing.
 
 Ordered roughly by how much they change what the project actually demonstrates.
 
-#### 1. `perceptual_hash.py` is fully built and never used
-`dhash`/`ahash`/`phash`/`hamming_distance`/`are_similar` exist, are individually
-correct, and have zero call sites. Wiring `are_similar` into
-`EmbeddingCache.lookup()` as a fallback (check a small window of recent hashes
-within Hamming distance ≤ N before declaring a miss) would make the marquee
-"perceptual hash caching" claim literally true instead of approximately true.
-This is the highest-leverage single change available.
+#### 1. ~~`perceptual_hash.py` is fully built and never used~~ — fixed
+`EmbeddingCache.lookup()` now falls back to a fuzzy match on a clean Redis
+miss: it keeps a bounded, in-memory window of the last `FUZZY_WINDOW_SIZE`
+(200) `(content_hash, embedding)` pairs it has seen, and reuses `hamming_distance`
+from `perceptual_hash.py` (previously dead code) to look for one within
+`FUZZY_HAMMING_THRESHOLD` (3 of 64 bits). A fuzzy match returns
+`CacheResult(hit=True, fuzzy=True)`, which `VoyagerStreamProcessor` surfaces
+as `cache_status: "FUZZY_HIT"` (distinct from exact `"HIT"`) in both the JSON
+result and structured logs, and `EmbeddingCache.get_stats()` tracks
+`fuzzy_hits` separately from total `cache_hits`. On the Prometheus side,
+`voyager_cache_lookups_total{status="hit"}` deliberately still counts fuzzy
+hits as `"hit"` — introducing a third label value would have silently dropped
+fuzzy hits from the existing "Cache Hit vs Miss Rate" Grafana panel, which
+filters by exact `status="hit"`/`"miss"` — with a new, additive
+`voyager_fuzzy_cache_hits_total` counter for the fine-grained view instead.
+
+Verified for real: constructed two frames where a single-pixel-region nudge
+(±1) changes the exact `content_hash` by exactly 2 bits (found empirically —
+see `_compute_content_hash`'s DCT-adjacent resize-and-diff behavior), fed both
+through a real `VoyagerStreamProcessor` against live Redis. Frame A missed and
+ran real MobileNetV2 inference (610ms). Frame B — a different exact hash —
+came back `FUZZY_HIT` with `inference_ms: 0.0`, reusing Frame A's embedding.
+`cache.fuzzy_hits` was `1` afterward, confirming the counter tracks correctly.
+
+This is also, by construction, an accuracy tradeoff worth being explicit
+about: a fuzzy hit assigns two genuinely-different frames the same embedding.
+That's the entire point of perceptual hashing (trade a small accuracy loss for
+skipped inference), but it's now something a reader can see happening in the
+data (`cache_status`, `fuzzy_hits`) rather than an invisible assumption.
 
 #### 2. ~~`S3Handler` is fully built and never called~~ — fixed
 `VoyagerStreamProcessor` now buffers each frame's `{content_hash, cache_status,
@@ -503,7 +525,7 @@ scaling doc's batched multi-GPU pool.
 | `processor/cache_handler.py` | [The cache layer](#the-cache-layer--what-perceptual-hash-caching-actually-means-here) |
 | `processor/flink_job.py` | [The frame lifecycle](#the-frame-lifecycle-precisely), [Orchestration modes](#orchestration-modes-processorflink_jobpy) |
 | `inference/model_handler.py` | [AI inference](#ai-inference-inferencemodel_handlerpy) |
-| `inference/perceptual_hash.py` | [The cache layer](#the-cache-layer--what-perceptual-hash-caching-actually-means-here), [Gap #1](#1-perceptual_hashpy-is-fully-built-and-never-used) |
+| `inference/perceptual_hash.py` | [The cache layer](#the-cache-layer--what-perceptual-hash-caching-actually-means-here), [Gap #1](#1-perceptual_hashpy-is-fully-built-and-never-used--fixed) |
 | `monitoring/metrics_exporter.py` | [Metrics](#metrics-monitoringmetrics_exporterpy) |
 | `storage/s3_handler.py` | [Storage](#storage-storages3_handlerpy), [Gap #2](#2-s3handler-is-fully-built-and-never-called--fixed) |
 | `docker-compose.yml` | [Local infrastructure topology](#local-infrastructure-topology) |

@@ -18,7 +18,7 @@ Camera Feeds → Kafka → PyFlink → Redis Cache → AI Model → S3
 ## Key Metrics
 
 - **Sub-50ms** per-frame processing latency (target; run `python -m loadtest.stress_test --test latency` for a measured number on your machine)
-- **Cache-driven inference savings** — the cache does exact content-hash matching today, not fuzzy perceptual matching (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)); the bundled synthetic test (`--test cache`) measures ~75% hit rate at its default parameters, 40%+ is the production-scale target from `loadtest/scale_design.md`
+- **Cache-driven inference savings** — exact content-hash matches first, falling back to a Hamming-distance fuzzy match (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) so near-identical frames also skip inference; the bundled synthetic test (`--test cache`) measures ~75% hit rate at its default parameters, 40%+ is the production-scale target from `loadtest/scale_design.md`
 - **1280-dim** MobileNetV2 embeddings
 - **6-partition** Kafka topic with LZ4 compression
 

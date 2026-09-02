@@ -80,18 +80,80 @@ class TestHitRate:
 
     def test_hit_rate_reflects_mixed_results(self):
         cache, client = _make_cache()
+        # Two hashes 64 bits apart so a miss on one never fuzzy-matches the other.
         client.get.side_effect = [b"\x00" * 4, None, b"\x00" * 4, None]
 
-        for _ in range(4):
-            cache.lookup("h")
+        cache.lookup("0000000000000000")
+        cache.lookup("ffffffffffffffff")
+        cache.lookup("0000000000000000")
+        cache.lookup("ffffffffffffffff")
 
         assert cache.hit_rate == 0.5
         assert cache.get_stats() == {
             "total_lookups": 4,
             "cache_hits": 2,
             "cache_misses": 2,
+            "fuzzy_hits": 0,
             "hit_rate": 0.5,
         }
+
+
+class TestFuzzyMatching:
+    def test_close_hash_reuses_recent_embedding(self):
+        cache, client = _make_cache()
+        original = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        # First frame: exact hit, seeds the fuzzy window.
+        client.get.return_value = original.tobytes()
+        cache.lookup("0000000000000000")
+
+        # Second frame: 2 bits different (within the 3-bit threshold), Redis
+        # has never seen this exact hash.
+        client.get.return_value = None
+        result = cache.lookup("0000000000000003")
+
+        assert result.hit is True
+        assert result.fuzzy is True
+        np.testing.assert_array_equal(result.embedding, original)
+        assert cache.fuzzy_hits == 1
+        assert cache.cache_misses == 0
+
+    def test_hash_beyond_threshold_stays_a_real_miss(self):
+        cache, client = _make_cache()
+        client.get.return_value = np.array([1.0], dtype=np.float32).tobytes()
+        cache.lookup("0000000000000000")
+
+        # Far outside the 3-bit threshold.
+        client.get.return_value = None
+        result = cache.lookup("ffffffffffffffff")
+
+        assert result.hit is False
+        assert result.fuzzy is False
+        assert cache.cache_misses == 1
+        assert cache.fuzzy_hits == 0
+
+    def test_fuzzy_window_evicts_oldest_beyond_capacity(self):
+        cache, client = _make_cache()
+        client.get.return_value = None
+
+        for i in range(cache.FUZZY_WINDOW_SIZE + 10):
+            cache.store(f"{i:016x}", np.array([1.0], dtype=np.float32))
+
+        assert len(cache._recent_hashes) == cache.FUZZY_WINDOW_SIZE
+        # The oldest entries (hash 0, 1, ...) should have been evicted.
+        remembered_hashes = {h for h, _ in cache._recent_hashes}
+        assert "0000000000000000" not in remembered_hashes
+
+    def test_store_seeds_the_fuzzy_window(self):
+        cache, client = _make_cache()
+        embedding = np.array([9.0], dtype=np.float32)
+        cache.store("0000000000000000", embedding)
+
+        client.get.return_value = None
+        result = cache.lookup("0000000000000001")  # 1 bit away
+
+        assert result.hit is True
+        assert result.fuzzy is True
+        np.testing.assert_array_equal(result.embedding, embedding)
 
 
 class TestFlush:
@@ -111,3 +173,13 @@ class TestFlush:
         cache.flush()
 
         client.delete.assert_not_called()
+
+    def test_flush_clears_the_fuzzy_window_too(self):
+        cache, client = _make_cache()
+        client.scan.return_value = (0, [])
+        cache.store("0000000000000000", np.array([1.0], dtype=np.float32))
+        assert len(cache._recent_hashes) == 1
+
+        cache.flush()
+
+        assert len(cache._recent_hashes) == 0

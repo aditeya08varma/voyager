@@ -23,6 +23,7 @@ class _FakeCacheResult:
     hit: bool
     embedding: object = None
     lookup_ms: float = 0.1
+    fuzzy: bool = False
 
 
 def _make_frame_message() -> bytes:
@@ -64,6 +65,17 @@ class TestProcessFrameCacheHit:
         cache.store.assert_not_called()
         assert result["cache_status"] == "HIT"
         assert result["embedding_dim"] == 1280
+
+    def test_fuzzy_hit_reports_distinct_status(self, processor):
+        proc, cache, model, _ = processor
+        cache.lookup.return_value = _FakeCacheResult(
+            hit=True, embedding=np.zeros(1280, dtype=np.float32), fuzzy=True
+        )
+
+        result = proc.process_frame(_make_frame_message())
+
+        model.generate_embedding.assert_not_called()
+        assert result["cache_status"] == "FUZZY_HIT"
         assert result["latency"]["inference_ms"] == 0.0
 
 

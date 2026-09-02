@@ -76,7 +76,7 @@ class VoyagerStreamProcessor:
         if cache_result.hit:
             embedding = cache_result.embedding
             inference_ms = 0.0
-            cache_status = "HIT"
+            cache_status = "FUZZY_HIT" if cache_result.fuzzy else "HIT"
         else:
             embedding = self.model.generate_embedding(frame)
             t_infer = time.perf_counter()
@@ -105,6 +105,7 @@ class VoyagerStreamProcessor:
             total_ms=total_ms,
             cache_hit=cache_result.hit,
             inference_ms=inference_ms,
+            fuzzy=cache_result.fuzzy,
         )
 
         if self.storage is not None:
