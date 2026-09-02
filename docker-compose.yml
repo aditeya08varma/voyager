@@ -78,9 +78,9 @@ services:
     environment:
       SERVICES: s3
       DEFAULT_REGION: us-east-1
-      DATA_DIR: /tmp/localstack/data
+      PERSISTENCE: 1
     volumes:
-      - localstack-data:/tmp/localstack
+      - localstack-data:/var/lib/localstack
     networks:
       - voyager-net
 

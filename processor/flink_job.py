@@ -29,6 +29,7 @@ from processor.frame_processor import decode_frame_message, FrameMetadata
 from processor.cache_handler import EmbeddingCache
 from inference.model_handler import ModelHandler
 from monitoring.metrics_exporter import MetricsCollector, start_metrics_server
+from storage.s3_handler import S3Handler
 
 log = structlog.get_logger(__name__)
 
@@ -40,11 +41,23 @@ class VoyagerStreamProcessor:
     standalone consumer for local development and testing.
     """
 
+    EMBEDDINGS_BATCH_SIZE = 50
+
     def __init__(self):
         self.cache = EmbeddingCache()
         self.model = ModelHandler()
         self.metrics = MetricsCollector()
         self._processed = 0
+        self._embedding_buffers: dict[str, list[dict]] = {}
+
+        # S3/LocalStack is optional local infra; any failure to reach it
+        # (unlike Redis, boto3 doesn't degrade gracefully on its own) should
+        # disable archival rather than take down frame processing.
+        try:
+            self.storage = S3Handler()
+        except Exception as e:
+            log.warning("s3_handler_unavailable", error=str(e))
+            self.storage = None
 
     def process_frame(self, raw_value: bytes) -> dict:
         """Full processing pipeline for a single frame message.
@@ -94,6 +107,9 @@ class VoyagerStreamProcessor:
             inference_ms=inference_ms,
         )
 
+        if self.storage is not None:
+            self._buffer_for_archival(meta.camera_id, meta.content_hash, cache_status, embedding)
+
         self._processed += 1
         if self._processed % 50 == 0:
             log.info(
@@ -104,6 +120,30 @@ class VoyagerStreamProcessor:
             )
 
         return result
+
+    def _buffer_for_archival(
+        self, camera_id: str, content_hash: str, cache_status: str, embedding: np.ndarray
+    ) -> None:
+        """Accumulate embeddings per camera and flush to S3 once a batch fills.
+
+        Archival is best-effort: an upload failure is logged and the batch is
+        dropped rather than retried, so a flaky S3/LocalStack never blocks or
+        crashes frame processing.
+        """
+        buffer = self._embedding_buffers.setdefault(camera_id, [])
+        buffer.append({
+            "content_hash": content_hash,
+            "cache_status": cache_status,
+            "embedding": embedding.tolist(),
+        })
+
+        if len(buffer) >= self.EMBEDDINGS_BATCH_SIZE:
+            try:
+                self.storage.upload_embeddings_batch(camera_id, buffer)
+            except Exception as e:
+                log.warning("s3_upload_failed", camera_id=camera_id, error=str(e))
+            finally:
+                self._embedding_buffers[camera_id] = []
 
 
 def _find_kafka_connector_jar() -> str:
