@@ -54,7 +54,7 @@ flowchart LR
     F --> D["frame_processor\n.decode_frame_message()\ndecode JPEG → grayscale →\ncontent_hash + edge_density"]
     D --> L{"EmbeddingCache.lookup()\nRedis GET voyager:emb:{hash}"}
     L -->|HIT| E1["cached 1280-d embedding\n(< 1ms)"]
-    L -->|MISS| M["ModelHandler\n.generate_embedding()\nMobileNetV2, CPU"]
+    L -->|MISS| M["ModelHandler\n.generate_embedding()\nMobileNetV2, CUDA → MPS → CPU"]
     M --> S["EmbeddingCache.store()\nRedis SETEX, TTL 3600s"]
     S --> E1
 
@@ -65,8 +65,8 @@ flowchart LR
     PM --> PR["Prometheus\n:8000-8005"]
     PR --> GR["Grafana :3000\n14-panel dashboard"]
 
-    S3H["storage.S3Handler\n(fully implemented)"]
-    R -.->|"no call site anywhere\nin the live pipeline"| S3H
+    E1 -->|"buffered per camera,\nflushed every 50 frames"| S3H["S3Handler\n.upload_embeddings_batch()"]
+    S3H --> S3B[("S3 / LocalStack\nvoyager-logs bucket")]
 ```
 
 The dashed line into `S3Handler` is deliberate — see [Known Gaps, #2](#2-s3handler-is-fully-built-and-never-called).
@@ -243,12 +243,14 @@ replaced).
 
 ### Storage (`storage/s3_handler.py`)
 
-`S3Handler` is complete: it auto-creates its two buckets against the LocalStack
-endpoint on init, and exposes `upload_model_artifact`, `upload_processing_log`,
-and `upload_embeddings_batch` (JSON-lines). None of these three methods has a
-call site outside `storage/s3_handler.py` itself. The architecture diagram's
-"→ S3" arrow in the README describes a capability that exists but isn't wired
-in yet.
+`S3Handler` auto-creates its two buckets against the LocalStack endpoint on
+init, and exposes `upload_model_artifact`, `upload_processing_log`, and
+`upload_embeddings_batch` (JSON-lines). `VoyagerStreamProcessor` now calls
+`upload_embeddings_batch` — see [The frame lifecycle](#the-frame-lifecycle-precisely)
+and [Known Gaps, #2](#2-s3handler-is-fully-built-and-never-called--fixed) for
+the wiring and how it was verified against real LocalStack. `upload_model_artifact`
+and `upload_processing_log` still have no call site — archiving processed
+embeddings was the one that matched the README's "→ S3" arrow.
 
 ### Orchestration modes (`processor/flink_job.py`)
 
@@ -339,14 +341,15 @@ was read anywhere in the codebase; the real ports are hardcoded in
 | `tests/test_processor.py` | `decode_frame_message`, `_compute_content_hash` determinism, `_compute_edge_density` |
 | `tests/test_producer.py` | `FrameMessage` construction, `generate_sample_video` output, `CameraSimulator.stop()` |
 | `tests/test_load.py` | `_generate_test_frame` determinism, encode/decode roundtrip, `LoadTestResult` construction |
+| `tests/test_cache.py` | `EmbeddingCache` lookup/store/flush, hit-rate math, Redis-error handling (mocked Redis client) |
+| `tests/test_model_handler.py` | `_select_device` priority (CUDA → MPS → CPU), lazy loading, unknown-model error, one real MobileNetV2 inference |
+| `tests/test_metrics.py` | `MetricsCollector` singleton behavior, hit/miss counting, throughput-window eviction, `get_summary` |
+| `tests/test_s3_handler.py` | `S3Handler` bucket bootstrap and all three upload methods (mocked `boto3.client`) |
+| `tests/test_flink_job.py` | `VoyagerStreamProcessor.process_frame` hit/miss branching and result shape (patched cache/model) |
 
-**Not covered by any test today:** `cache_handler.py` (`EmbeddingCache`),
-`model_handler.py`, `s3_handler.py`, `metrics_exporter.py`, and `flink_job.py`
-(`VoyagerStreamProcessor`, `create_flink_pipeline`). A stale
-`tests/__pycache__/test_cache.cpython-312-pytest-9.0.3.pyc` is the only trace
-of a `test_cache.py` that once existed and was removed without a replacement —
-worth restoring first, since `EmbeddingCache` is the most-connected module in
-the codebase.
+**Not covered:** `create_flink_pipeline()` itself — the actual PyFlink
+`KafkaSource`/`KafkaSink` wiring — since testing it meaningfully needs either a
+running Kafka cluster or a much heavier PyFlink test harness.
 
 `loadtest/stress_test.py` is the only place the cache's cost-saving effect is
 actually exercised, via `test_cache_hit_simulation()`. Its default parameters
@@ -385,12 +388,28 @@ within Hamming distance ≤ N before declaring a miss) would make the marquee
 "perceptual hash caching" claim literally true instead of approximately true.
 This is the highest-leverage single change available.
 
-#### 2. `S3Handler` is fully built and never called
-`upload_model_artifact`, `upload_processing_log`, and `upload_embeddings_batch`
-are complete and untested-but-correct-looking. Nothing in `processor/flink_job.py`
-calls any of them. Batch-uploading processed embeddings periodically from
-`VoyagerStreamProcessor` would close the gap between the architecture diagram
-and the code.
+#### 2. ~~`S3Handler` is fully built and never called~~ — fixed
+`VoyagerStreamProcessor` now buffers each frame's `{content_hash, cache_status,
+embedding}` per camera and calls `S3Handler.upload_embeddings_batch()` once a
+camera's buffer reaches `EMBEDDINGS_BATCH_SIZE` (50). `S3Handler` construction
+and every upload call are wrapped so a failure degrades to "archival disabled"
+rather than crashing frame processing — S3/LocalStack remains optional infra,
+matching how `EmbeddingCache` already degrades on Redis errors.
+
+Verified for real, not just unit-tested: brought up Kafka + Redis + LocalStack,
+produced 60 real frames from one camera, ran them through
+`VoyagerStreamProcessor`, then queried LocalStack's S3 directly and confirmed
+`s3://voyager-logs/embeddings/CAM-000/.../batch_....jsonl` existed with exactly
+50 lines, each a real record with `content_hash`, `cache_status`, and a
+1280-dim `embedding`.
+
+That verification surfaced an unrelated, pre-existing bug along the way:
+LocalStack's `DATA_DIR: /tmp/localstack/data` combined with a volume mounted at
+`/tmp/localstack` made LocalStack try to `rm -rf` its own mount point on every
+boot and crash (`OSError: [Errno 16] Device or resource busy`) — meaning the
+`localstack` service in `docker-compose.yml` could never actually start,
+regardless of this change. Fixed by switching to the modern
+`PERSISTENCE: 1` + a volume at `/var/lib/localstack`.
 
 #### 3. ~~The docker-compose Flink cluster is never actually used~~ — removed
 `--mode flink` always ran (and still runs) an embedded PyFlink MiniCluster
@@ -412,10 +431,18 @@ now states this accurately. The duplication and the hardcoded paths are still
 there — worth deleting this file in favor of the settings-driven
 `run_multi_camera_producer()` if that's ever a priority.
 
-#### 5. Missing test coverage
-No tests for `cache_handler.py`, `model_handler.py`, `s3_handler.py`,
-`metrics_exporter.py`, or `flink_job.py`. Restoring `test_cache.py` first would
-cover the most-connected module in the codebase.
+#### 5. ~~Missing test coverage~~ — fixed
+Added `tests/test_cache.py`, `tests/test_model_handler.py`,
+`tests/test_metrics.py`, `tests/test_s3_handler.py`, and `tests/test_flink_job.py`
+(covering `VoyagerStreamProcessor`'s hit/miss branching). Suite went from 15 to
+49 tests, all passing — including one real (not mocked) MobileNetV2 inference
+in `test_model_handler.py`, since the weights are already cached locally.
+`create_flink_pipeline()` itself (the PyFlink wiring) is still untested — it
+needs either a running Kafka or a much heavier PyFlink test harness, and
+wasn't worth it for this pass. Exercising `s3_handler.py` for the first time
+also surfaced a small pre-existing issue: it calls the deprecated
+`datetime.utcnow()` in three places — not fixed here, since it was out of
+scope for "add tests," but worth a follow-up.
 
 #### 6. ~~The only measured cache hit rate is 75%, not 40%~~ — README reworded
 `test_cache_hit_simulation()`'s default parameters mathematically guarantee a
@@ -478,7 +505,7 @@ scaling doc's batched multi-GPU pool.
 | `inference/model_handler.py` | [AI inference](#ai-inference-inferencemodel_handlerpy) |
 | `inference/perceptual_hash.py` | [The cache layer](#the-cache-layer--what-perceptual-hash-caching-actually-means-here), [Gap #1](#1-perceptual_hashpy-is-fully-built-and-never-used) |
 | `monitoring/metrics_exporter.py` | [Metrics](#metrics-monitoringmetrics_exporterpy) |
-| `storage/s3_handler.py` | [Storage](#storage-storages3_handlerpy), [Gap #2](#2-s3handler-is-fully-built-and-never-called) |
+| `storage/s3_handler.py` | [Storage](#storage-storages3_handlerpy), [Gap #2](#2-s3handler-is-fully-built-and-never-called--fixed) |
 | `docker-compose.yml` | [Local infrastructure topology](#local-infrastructure-topology) |
 | `loadtest/scale_design.md` | [The 10TB/day scaling design](#the-10tbday-scaling-design--whats-real-vs-whats-a-plan) |
 | `loadtest/stress_test.py` | [Testing & verification](#testing--verification) |
