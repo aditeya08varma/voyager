@@ -1,5 +1,8 @@
 # Voyager — High-Throughput Video Processing Pipeline
 
+[![Tests](https://github.com/aditeya08varma/voyager/actions/workflows/tests.yml/badge.svg)](https://github.com/aditeya08varma/voyager/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Real-time video frame processing pipeline with AI inference caching,
 built on Kafka, Apache Flink (PyFlink), Redis, and MobileNetV2.
 
