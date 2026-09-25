@@ -1,4 +1,4 @@
-# Voyager — High-Throughput Video Processing Pipeline
+# Voyager: High-Throughput Video Processing Pipeline
 
 [![Tests](https://github.com/aditeya08varma/voyager/actions/workflows/tests.yml/badge.svg)](https://github.com/aditeya08varma/voyager/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -6,9 +6,9 @@
 Real-time video frame processing pipeline with AI inference caching,
 built on Kafka, Apache Flink (PyFlink), Redis, and MobileNetV2.
 
-For a full, source-verified technical deep dive — architecture diagrams, the
+For a full, source-verified technical deep dive, architecture diagrams, the
 exact caching mechanism, and a list of known gaps between this README and the
-code — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+code; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Architecture
 
@@ -21,7 +21,7 @@ Camera Feeds → Kafka → PyFlink → Redis Cache → AI Model → S3
 ## Key Metrics
 
 - **Sub-50ms** per-frame processing latency (target; run `python -m loadtest.stress_test --test latency` for a measured number on your machine)
-- **Cache-driven inference savings** — exact content-hash matches first, falling back to a Hamming-distance fuzzy match (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) so near-identical frames also skip inference; the bundled synthetic test (`--test cache`) measures ~75% hit rate at its default parameters, 40%+ is the production-scale target from `loadtest/scale_design.md`
+- **Cache-driven inference savings**: exact content-hash matches first, falling back to a Hamming-distance fuzzy match (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) so near-identical frames also skip inference; the bundled synthetic test (`--test cache`) measures ~75% hit rate at its default parameters, 40%+ is the production-scale target from `loadtest/scale_design.md`
 - **1280-dim** MobileNetV2 embeddings
 - **6-partition** Kafka topic with LZ4 compression
 
@@ -68,11 +68,11 @@ python -m processor.flink_job --mode standalone
 | Service    | URL                    | Credentials     |
 |------------|------------------------|-----------------|
 | Grafana    | http://localhost:3000  | admin / voyager |
-| Flink UI (only while `--mode flink` is running) | http://localhost:8082 | — |
-| Prometheus | http://localhost:9090  | —               |
+| Flink UI (only while `--mode flink` is running) | http://localhost:8082 | n/a |
+| Prometheus | http://localhost:9090  | n/a |
 
 > `--mode flink` runs its own embedded PyFlink MiniCluster with its UI on port
-> 8082 — it does not submit to a separate Flink cluster; `docker-compose.yml`
+> 8082; it does not submit to a separate Flink cluster; `docker-compose.yml`
 > doesn't run one. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Cache Mechanism
